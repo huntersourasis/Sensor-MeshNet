@@ -1,15 +1,21 @@
 #include <WiFi.h>
 #include <esp_now.h>
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
 
-// Pin definitions
-#define MQ2_PIN 32
+#define MQ2_PIN 34
 #define VIBRATION_PIN 13
 #define MQ135_PIN 35
+#define B_LED 12
+#define DHTPIN 14
+#define DHTTYPE DHT11
 
-uint8_t broadcastAddress[] = {0xff,0xff,0xff,0xff,0xff,0xff};
+DHT dht(DHTPIN, DHTTYPE);
+
+uint8_t broadcastAddress[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
 typedef struct {
-  char json[200];
+  char json[250];
 } Packet;
 
 Packet packet;
@@ -17,12 +23,13 @@ Packet packet;
 void setup() {
   Serial.begin(115200);
 
-  // Sensor pins
   pinMode(MQ2_PIN, INPUT);
   pinMode(VIBRATION_PIN, INPUT);
   pinMode(MQ135_PIN, INPUT);
+  pinMode(B_LED, OUTPUT);
 
-  // WiFi & ESP-NOW setup
+  dht.begin();
+
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
 
@@ -35,26 +42,40 @@ void setup() {
   memcpy(peerInfo.peer_addr, broadcastAddress, 6);
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
-  esp_now_add_peer(&peerInfo);
+  
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("Failed to add peer");
+    return;
+  }
 
-  Serial.println("Sensor node started");
+  Serial.println("Sensor node with DHT11 started");
 }
 
 void loop() {
-  // Read sensors
-  int mq2Value = analogRead(MQ2_PIN);       // Gas level
-  int mq135Value = analogRead(MQ135_PIN);   // Air quality
-  int vibrationValue = digitalRead(VIBRATION_PIN); // 0 or 1
+  // Reading sensors
+  int mq2Value = analogRead(MQ2_PIN);   
+  int mq135Value = analogRead(MQ135_PIN); 
+  int vibrationValue = digitalRead(VIBRATION_PIN); 
+  
+  float h = dht.readHumidity();
+  float t = dht.readTemperature(); 
 
-  // Format JSON
+  if (isnan(h) || isnan(t)) {
+    Serial.println("Failed to read from DHT sensor!");
+    h = 0;
+    t = 0;
+  }
+
   snprintf(packet.json, sizeof(packet.json),
-           "{\"node\":\"sensor\",\"mq2\":%d,\"mq135\":%d,\"vibration\":%d}",
-           mq2Value, mq135Value, vibrationValue);
+           "{\"node\":\"sensor\",\"mq2\":%d,\"mq135\":%d,\"vib\":%d,\"temp\":%.1f,\"hum\":%.1f}",
+           mq2Value, mq135Value, vibrationValue, t, h);
 
-  // Send via ESP-NOW
-  esp_now_send(broadcastAddress, (uint8_t*)&packet, sizeof(packet));
+  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)&packet, sizeof(packet));
+  
+  digitalWrite(B_LED, HIGH);
+  delay(200); 
+  digitalWrite(B_LED, LOW);
 
   Serial.println(packet.json);
-
   delay(2000);
 }
